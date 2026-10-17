@@ -6,13 +6,19 @@ on:
       delay:
         description: "Pausa entre pedidos (segundos)"
         default: "1"
-      max_pages:
-        description: "Máximo de páginas a visitar na fase 1"
-        default: "2000"
+      workers:
+        description: "Pedidos em paralelo (3 é um valor educado)"
+        default: "3"
+      max_animes:
+        description: "Limite de títulos por fase (0 = todos; use 5 para testar)"
+        default: "0"
+      match:
+        description: "Só títulos cujo nome combine com este texto/regex (vazio = todos)"
+        default: ""
       modo:
-        description: "completo = anime + links | descobrir = só fase 1 | links = só fase 2"
+        description: "completo = tudo | catalogo = listas+sinopses (sem links) | links = só links dos episódios"
         type: choice
-        options: [completo, descobrir, links]
+        options: [completo, catalogo, links]
         default: completo
   schedule:
     - cron: "0 3 * * 1"         # toda segunda às 03:00 UTC
@@ -40,16 +46,21 @@ jobs:
         id: run
         env:
           DELAY: ${{ github.event.inputs.delay || '1' }}
-          MAX_PAGES: ${{ github.event.inputs.max_pages || '2000' }}
+          WORKERS: ${{ github.event.inputs.workers || '3' }}
+          MAX_ANIMES: ${{ github.event.inputs.max_animes || '0' }}
+          MATCH: ${{ github.event.inputs.match || '' }}
           MODO: ${{ github.event.inputs.modo || 'completo' }}
         run: |
-          EXTRA=""
-          [ "$MODO" = "descobrir" ] && EXTRA="--sem-links"
-          [ "$MODO" = "links" ] && EXTRA="--so-links"
+          FASES=123
+          [ "$MODO" = "catalogo" ] && FASES=12
+          [ "$MODO" = "links" ] && FASES=3
+          EXTRA=()
+          [ -n "$MATCH" ] && EXTRA+=(--match "$MATCH")
           # para 20 min antes do limite, para dar tempo de guardar o resultado
           set +e
           timeout 340m python animes.py db \
-            -o animes_db.json --delay "$DELAY" --max-pages "$MAX_PAGES" $EXTRA
+            -o animes_db.json --delay "$DELAY" --workers "$WORKERS" \
+            --max-animes "$MAX_ANIMES" --fases "$FASES" "${EXTRA[@]}"
           CODE=$?
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           # 124 = acabou o tempo (normal em sites grandes); outro erro != 0 falha o job
@@ -85,4 +96,6 @@ jobs:
           gh workflow run "${{ github.workflow }}" --ref "${GITHUB_REF_NAME}" \
             -f modo="${{ github.event.inputs.modo || 'completo' }}" \
             -f delay="${{ github.event.inputs.delay || '1' }}" \
-            -f max_pages="${{ github.event.inputs.max_pages || '2000' }}"
+            -f workers="${{ github.event.inputs.workers || '3' }}" \
+            -f max_animes="${{ github.event.inputs.max_animes || '0' }}" \
+            -f match="${{ github.event.inputs.match || '' }}"
