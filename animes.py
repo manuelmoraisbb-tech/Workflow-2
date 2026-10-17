@@ -14,6 +14,7 @@ Exemplos:
   python animes.py db                          # dublados + legendados + filmes, tudo
   python animes.py db --match "black clover"   # teste rápido com um título
   python animes.py db --fases 12               # só catálogo (sem links dos episódios)
+  python animes.py diag https://animesdigital.org/animes-dublado001   # ver o que o site devolve
   python animes.py eps te__2_.html
   python animes.py eps https://animesdigital.org/anime/a/xxxx --delay 1
   python animes.py tokens pagina.html outra.html -o blogger.txt
@@ -21,13 +22,14 @@ Exemplos:
   python animes.py serie resultado.html
   python animes.py crawl te__2_.html --max-pages 50
 """
-import argparse, base64, email, html, json, re, sys, time
+import argparse, base64, email, gzip, html, json, re, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from email import policy
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urldefrag, urljoin, urlparse
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 UA = ("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
@@ -47,12 +49,30 @@ EP_NUM = re.compile(r"(?:epis[oó]dio|episode|ep\.?)[\s:#-]*(\d+(?:\.\d+)?)", re
 
 
 # ----------------------------------------------------------------- comum
+def pedir(url, ref=None):
+    """(status, url_final, cabeçalhos, texto) - não lança erro em HTTP 4xx/5xx."""
+    req = Request(url, headers={
+        "User-Agent": UA, "Referer": ref or url,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"})
+    try:
+        r = urlopen(req, timeout=25)
+        status = r.status
+    except HTTPError as e:
+        r, status = e, e.code
+    raw = r.read()
+    if (r.headers.get("Content-Encoding") or "").lower() == "gzip":
+        raw = gzip.decompress(raw)
+    return status, r.geturl(), r.headers, raw.decode("utf-8", "replace")
+
+
 def baixar(url, tentativas=3, ref=None):
     for i in range(tentativas):
         try:
-            req = Request(url, headers={"User-Agent": UA, "Referer": ref or url})
-            with urlopen(req, timeout=25) as r:
-                return r.read().decode("utf-8", "replace")
+            status, _, _, texto = pedir(url, ref)
+            if status >= 400:
+                raise Exception(f"HTTP {status}")
+            return texto
         except Exception:
             if i == tentativas - 1:
                 raise
@@ -712,6 +732,68 @@ def paralelo(fn, itens, workers, delay):
                 yield from ex.map(w, lote)
 
 
+def diagnosticar(url, ficheiro="debug.html", ref=None):
+    """Mostra o que o site REALMENTE devolve a este script e guarda o HTML bruto."""
+    try:
+        status, final, cab, t = pedir(url, ref)
+    except Exception as ex:
+        print(f"  [DIAG] {url}\n  [DIAG] não foi possível ligar: {ex}")
+        return
+    Path(ficheiro).write_text(t, encoding="utf-8")
+    titulo = txt(um(r"<title[^>]*>(.*?)</title>", t))
+    bloqueio = re.search(r"just a moment|cloudflare|captcha|attention required|access denied|enable javascript",
+                         t, re.I)
+    print(f"  [DIAG] {url[:100]}")
+    print(f"  [DIAG] HTTP {status} | {len(t)} bytes | tipo: {cab.get('Content-Type')} | servidor: {cab.get('Server')}")
+    if final != url:
+        print(f"  [DIAG] redirecionou para: {final[:100]}")
+    print(f"  [DIAG] título: {titulo[:80]!r}")
+    print(f"  [DIAG] itemA={t.count('class=\"itemA\"')} item_ep={t.count('item_ep')} "
+          f"iframes={t.count('<iframe')} anivideo={t.count('anivideo')} blogger={t.count('blogger.com')} "
+          f"/anime/a/={t.count('/anime/a/')} <script={t.count('<script')}")
+    if bloqueio:
+        print(f"  [DIAG] parece uma página de proteção/bloqueio ('{bloqueio.group(0)}')")
+    print(f"  [DIAG] HTML bruto guardado em {Path(ficheiro).resolve()}")
+
+
+def cmd_diag(a):
+    diagnosticar(a.url, a.o)
+
+
+def slug_nome(url):
+    return re.sub(r"[-_]+", " ", urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]).strip().title()
+
+
+def descobrir_sitemap(base):
+    """Todos os URLs /anime/a/... e /filme/... a partir dos sitemaps (não precisa de JavaScript)."""
+    skip = re.compile(r"/(?:post|video|episodes?)-sitemap|sitemap-posts-post-|category|/tag|genero|author|page-sitemap", re.I)
+    vistos, achados = set(), []
+
+    def ler_xml(u, prof=0):
+        if u in vistos or prof > 2:
+            return
+        vistos.add(u)
+        try:
+            xml = baixar(u)
+        except Exception as ex:
+            print(f"  sitemap {u.replace(base, '')}: {ex}")
+            return
+        locs = [html.unescape(x) for x in re.findall(r"<loc>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)", xml)]
+        print(f"  sitemap {u.replace(base, '')}: {len(locs)} entradas")
+        for l in locs:
+            if re.search(r"\.xml(?:\?|$)", l):
+                if not skip.search(l):
+                    ler_xml(l, prof + 1)
+                    time.sleep(0.5)
+            elif re.search(r"/(?:anime/a|filme)/[^/]+/?$", urlparse(l).path):
+                achados.append(url_limpa(l))
+    for c in ("/sitemap_index.xml", "/sitemap.xml", "/wp-sitemap.xml"):
+        ler_xml(base + c)
+        if achados:
+            break
+    return uniq(achados)
+
+
 def cmd_db(a):
     out, base = Path(a.o), a.base.rstrip("/")
     animes = {}
@@ -744,55 +826,88 @@ def cmd_db(a):
         an["nome"] = an["nome"] or item["nome"]
         an["poster"] = an["poster"] or item["poster"]
 
-    # ---------------- fase 1: listas (todos os animes e filmes)
+    # ---------------- fase 1: descobrir todos os animes/filmes
     if "1" in a.fases:
-        fontes = []   # (tipo, audio, modelo_url, html_da_pagina1_ou_None)
-        for f in a.fontes:
-            pre = None
-            if Path(f).is_file():
-                cab = open(f, "rb").read(4000).decode("latin-1")
-                loc = (re.search(r"Snapshot-Content-Location:\s*(\S+)", cab) or [None, ""])[1]
-                pre = ler(f)
-            else:
-                loc = f
-            if "pagina=" not in loc:
-                print(f"[AVISO] {f}: não consegui descobrir o URL da lista (esperava ...pagina=N)")
-                continue
-            fontes.append(("filme" if "filmes" in loc else "anime",
-                           "dublado" if "dublado" in loc else "legendado" if "legendado" in loc else "",
-                           re.sub(r"pagina=\d+", "pagina={p}", loc), pre))
-        if not fontes:
-            fontes = [(t, au, base + c, None) for t, au, c in LISTAS]
-        print(f"Fase 1: listas ({len(fontes)})")
-        for tipo, audio, modelo, pre in fontes:
-            total, vistos1, avisou = None, set(), False
-            p = 1
-            while total is None or p <= total:
-                try:
-                    t = pre if (p == 1 and pre) else baixar(modelo.format(p=p))
-                except Exception as ex:
-                    print(f"  [ERRO] {tipo} {audio} pág {p}: {ex}")
-                    p += 1
+        vazias = 0
+        if a.descoberta in ("auto", "listas"):
+            fontes = []   # (tipo, audio, modelo_url, html_da_pagina1_ou_None)
+            for f in a.fontes:
+                pre = None
+                if Path(f).is_file():
+                    cab = open(f, "rb").read(4000).decode("latin-1")
+                    loc = (re.search(r"Snapshot-Content-Location:\s*(\S+)", cab) or [None, ""])[1]
+                    pre = ler(f)
+                else:
+                    loc = f
+                if "pagina=" not in loc:
+                    print(f"[AVISO] {f}: não consegui descobrir o URL da lista (esperava ...pagina=N)")
                     continue
-                itens, tot = parse_lista(t)
-                total = total or tot
-                if p == 1:
-                    vistos1 = {i["url"] for i in itens}
-                elif itens and not avisou and {i["url"] for i in itens} <= vistos1:
-                    avisou = True
-                    print("  [AVISO] a pág", p, "repete a pág 1: a paginação por URL pode não funcionar. "
-                          "Guarda cada página da lista no navegador e passa os HTMLs.")
-                for it in itens:
-                    reg(it, tipo, audio)
-                print(f"  {tipo} {audio or ''} pág {p}/{total}: {len(itens)} itens (total {len(animes)})")
-                p += 1
-                if not (p == 2 and pre):
-                    time.sleep(a.delay)
+                fontes.append(("filme" if "filmes" in loc else "anime",
+                               "dublado" if "dublado" in loc else "legendado" if "legendado" in loc else "",
+                               re.sub(r"pagina=\d+", "pagina={p}", loc), pre))
+            if not fontes:
+                fontes = [(t, au, base + c, None) for t, au, c in LISTAS]
+            print(f"Fase 1: listas ({len(fontes)})")
+            for tipo, audio, modelo, pre in fontes:
+                total, vistos1, avisou, erros, n_lista = None, set(), False, 0, 0
+                p = 1
+                while total is None or p <= total:
+                    try:
+                        t = pre if (p == 1 and pre) else baixar(modelo.format(p=p))
+                    except Exception as ex:
+                        erros += 1
+                        print(f"  [ERRO] {tipo} {audio} pág {p}: {ex}")
+                        if total is None:
+                            if erros >= 3:
+                                break
+                            time.sleep(2)
+                            continue
+                        p += 1
+                        continue
+                    itens, tot = parse_lista(t)
+                    total = total or tot
+                    if p == 1:
+                        vistos1 = {i["url"] for i in itens}
+                        if not itens:
+                            print(f"  [AVISO] {tipo} {audio}: a página 1 não trouxe nenhum item. "
+                                  "O site deve preencher a lista com JavaScript. Diagnóstico:")
+                            diagnosticar(modelo.format(p=1), f"debug_lista_{tipo}_{audio or 'x'}.html")
+                            break
+                    elif itens and not avisou and {i["url"] for i in itens} <= vistos1:
+                        avisou = True
+                        print("  [AVISO] a pág", p, "repete a pág 1: a paginação por URL pode não funcionar.")
+                    for it in itens:
+                        reg(it, tipo, audio)
+                    n_lista += len(itens)
+                    print(f"  {tipo} {audio or ''} pág {p}/{total}: {len(itens)} itens (total {len(animes)})")
+                    p += 1
+                    if not (p == 2 and pre):
+                        time.sleep(a.delay)
+                vazias += (n_lista == 0)
+                salvar()
+        if a.descoberta == "sitemap" or (a.descoberta == "auto" and vazias):
+            print("\nFase 1 (alternativa): a procurar nos sitemaps do site")
+            urls = descobrir_sitemap(base)
+            for u in urls:
+                novo = u not in animes
+                tipo = "filme" if "/filme/" in u else "anime"
+                slug = u.rsplit("/", 1)[-1].lower()
+                reg({"url": u, "poster": "", "nome": slug_nome(u)}, tipo,
+                    "" if tipo == "filme" else ("dublado" if "dublado" in slug else "legendado"))
+                if novo:
+                    animes[u]["nome_provisorio"] = True   # o nome real vem da página (fase 2)
+            print(f"  {len(urls)} URLs de anime/filme encontrados nos sitemaps")
             salvar()
         print(f"Fase 1 concluída: {len(animes)} títulos.\n")
+        if not animes:
+            print("NADA encontrado. Corre:  python animes.py diag \"" + base + "/animes-dublado001\"\n"
+                  "e envia a saída (e o ficheiro debug.html) para eu ajustar a extração ao que o site devolve.")
+            return
 
     alvo = sorted((x for x in animes.values() if not a.match or re.search(a.match, x["nome"], re.I)),
                   key=lambda x: x["nome"].lower())
+
+    dbg = {"anime": False, "ep": False}
 
     # ---------------- fase 2: detalhes (sinopse, gêneros, episódios)
     if "2" in a.fases:
@@ -823,6 +938,12 @@ def cmd_db(a):
                 print(f"  ✗ {an['nome']}: {err}")
                 continue
             d0, eps = r
+            if an.pop("nome_provisorio", False) and d0["nome"]:
+                an["nome"] = d0["nome"]
+            if not eps and not dbg["anime"]:
+                dbg["anime"] = True
+                print(f"  [AVISO] {an['nome']}: nenhum episódio na página. Diagnóstico:")
+                diagnosticar(an["url"], "debug_anime.html")
             an["poster"] = d0["poster"] or an["poster"]
             an["descricao"] = d0["sinopse"]
             an["generos"] = d0["generos"]
@@ -866,6 +987,10 @@ def cmd_db(a):
                     ok += 1
                 else:
                     print(f"  ✗ ep {e['episodio']}: sem link")
+                    if not dbg["ep"]:
+                        dbg["ep"] = True
+                        print("  [AVISO] primeiro episódio sem link. Diagnóstico:")
+                        diagnosticar(e["url"], "debug_episodio.html")
             print(f"  {ok}/{len(falta)} com link")
             salvar()   # grava após cada anime: pode parar (Ctrl+C) e continuar depois
         print("\nFase 3 concluída.")
@@ -892,7 +1017,14 @@ def main():
     s.add_argument("--match", help="regex: só processa títulos cujo nome combine (fases 2 e 3)")
     s.add_argument("--max-animes", type=int, default=0, help="limite de títulos por fase e execução (0 = todos)")
     s.add_argument("--workers", type=int, default=3, help="pedidos em paralelo (padrão 3)")
+    s.add_argument("--descoberta", choices=["auto", "listas", "sitemap"], default="auto",
+                   help="como achar os animes: listas do site, sitemap, ou auto (listas e, se vierem vazias, sitemap)")
     s.set_defaults(f=cmd_db)
+
+    s = sub.add_parser("diag", help="mostra o que o site devolve a este script (e guarda o HTML)")
+    s.add_argument("url")
+    s.add_argument("-o", default="debug.html", help="onde guardar o HTML bruto")
+    s.set_defaults(f=cmd_diag)
 
     s = novo("eps", "página com todos os episódios -> 'ep|link do blogger'")
     s.add_argument("pagina", help="HTML/MHTML guardado ou URL")
