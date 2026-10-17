@@ -1,0 +1,88 @@
+name: Atualizar base de animes
+
+on:
+  workflow_dispatch:            # botão "Run workflow" na aba Actions
+    inputs:
+      delay:
+        description: "Pausa entre pedidos (segundos)"
+        default: "1"
+      max_pages:
+        description: "Máximo de páginas a visitar na fase 1"
+        default: "2000"
+      modo:
+        description: "completo = anime + links | descobrir = só fase 1 | links = só fase 2"
+        type: choice
+        options: [completo, descobrir, links]
+        default: completo
+  schedule:
+    - cron: "0 3 * * 1"         # toda segunda às 03:00 UTC
+
+permissions:
+  contents: write               # para guardar animes_db.json no repositório
+  actions: write                # para o workflow se re-executar quando o tempo acaba
+
+concurrency:
+  group: animes-db              # nunca duas execuções ao mesmo tempo
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360        # limite máximo de um job no GitHub
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rodar o extrator (retoma de onde parou)
+        id: run
+        env:
+          DELAY: ${{ github.event.inputs.delay || '1' }}
+          MAX_PAGES: ${{ github.event.inputs.max_pages || '2000' }}
+          MODO: ${{ github.event.inputs.modo || 'completo' }}
+        run: |
+          EXTRA=""
+          [ "$MODO" = "descobrir" ] && EXTRA="--sem-links"
+          [ "$MODO" = "links" ] && EXTRA="--so-links"
+          # para 20 min antes do limite, para dar tempo de guardar o resultado
+          set +e
+          timeout 340m python animes.py db \
+            -o animes_db.json --delay "$DELAY" --max-pages "$MAX_PAGES" $EXTRA
+          CODE=$?
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          # 124 = acabou o tempo (normal em sites grandes); outro erro != 0 falha o job
+          [ "$CODE" -eq 0 ] || [ "$CODE" -eq 124 ]
+
+      - name: Guardar a base no repositório
+        if: always()
+        run: |
+          [ -f animes_db.json ] || exit 0
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add animes_db.json
+          git diff --cached --quiet && { echo "Sem mudanças."; exit 0; }
+          TOTAL=$(python -c "import json;d=json.load(open('animes_db.json'));print(d['total_animes'],'animes,',d['total_links'],'/',d['total_episodios'],'links')")
+          git commit -m "Atualiza base de animes ($TOTAL)"
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push
+
+      - name: Guardar também como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: animes_db
+          path: animes_db.json
+          if-no-files-found: ignore
+
+      - name: Continuar numa nova execução se o tempo acabou
+        if: steps.run.outputs.code == '124'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Tempo esgotado: a lançar nova execução para continuar."
+          gh workflow run "${{ github.workflow }}" --ref "${GITHUB_REF_NAME}" \
+            -f modo="${{ github.event.inputs.modo || 'completo' }}" \
+            -f delay="${{ github.event.inputs.delay || '1' }}" \
+            -f max_pages="${{ github.event.inputs.max_pages || '2000' }}"
