@@ -84,7 +84,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: animes_db
-          path: animes_db.json
+          path: |
+            animes_db.json
+            debug_*.html
           if-no-files-found: ignore
 
       - name: Continuar numa nova execução se o tempo acabou
