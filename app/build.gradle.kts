@@ -27,6 +27,8 @@ android {
         versionName = "1.0.0"
         // Endereço do site (muda aqui se mudares de domínio)
         buildConfigField("String", "SITE_URL", "\"https://mb-animes.ct.ws\"")
+        // false = o site usa index.php?r=/rota (sem rewrite, como no InfinityFree); true = URLs bonitos (/catalogo)
+        buildConfigField("boolean", "PRETTY_URLS", "false")
     }
 
     signingConfigs {

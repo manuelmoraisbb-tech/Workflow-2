@@ -50,3 +50,6 @@ app/src/main/java/com/mbanimes/app/
 - `Api.kt`: cliente de `/api/v1` (login, tokens, chamadas JSON). `Session` guarda o token.
 - `ChallengeInterceptor.kt`: resolve o desafio JavaScript do InfinityFree (cookie `__test`) dentro do OkHttp. **É a parte frágil**: se o InfinityFree mudar o desafio, a API deixa de responder ao app.
 - Na versão debug, ao abrir o app aparece um aviso "API OK" ou o erro — usa-o para confirmar que tudo liga.
+
+## URLs sem rewrite
+O site usa `index.php?r=/rota`. Em `app/build.gradle.kts`, `PRETTY_URLS = false` (padrão). Se um dia ativares URLs bonitos no site, muda para `true`.

@@ -346,12 +346,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadTab(path: String) {
-        val target = siteUrl.trimEnd('/') + path
-        if (currentUrl.trimEnd('/') == target.trimEnd('/')) {
+        if (Site.logicalPath(Uri.parse(currentUrl)) == path && isTrustedPage()) {
             b.webView.scrollTo(0, 0)
         } else {
             clearHistoryOnFinish = true
-            b.webView.loadUrl(target)
+            b.webView.loadUrl(Site.url(path))
         }
     }
 
@@ -368,7 +367,7 @@ class MainActivity : AppCompatActivity() {
         if (url == null || b.downloadsPanel.isVisible) return
         val u = Uri.parse(url)
         if (!isSiteUri(u)) return
-        val p = u.path.orEmpty()
+        val p = Site.logicalPath(u)
         b.refresh.isEnabled = !p.startsWith("/assistir") // evita recarregar sem querer durante o vídeo
         val tab: Int? = when {
             p.startsWith("/catalogo") -> R.id.tab_catalog
