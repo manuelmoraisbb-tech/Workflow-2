@@ -25,4 +25,32 @@ object Site {
         val p = uri.path.orEmpty().removeSuffix("/index.php").trimEnd('/')
         return if (p.isEmpty()) "/" else p
     }
+
+    private val rootHost: String = Uri.parse(BuildConfig.SITE_URL).host.orEmpty()
+    private val fileExt = Regex(
+        "\\.(php|js|css|map|png|jpe?g|gif|webp|svg|ico|json|xml|txt|mp4|m3u8|ts|woff2?|ttf)$",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Sem rewrite no servidor, um link "bonito" (ex.: /assistir/naruto/1/3, vindo de JS ou de dados
+     * guardados no aparelho) cai no index.php sem rota e abre a página inicial.
+     * Devolve o endereço corrigido (index.php?r=/assistir/naruto/1/3) ou null se já está certo.
+     */
+    fun normalize(uri: Uri): String? {
+        if (BuildConfig.PRETTY_URLS) return null
+        if (!uri.host.equals(rootHost, ignoreCase = true)) return null
+        if (!uri.getQueryParameter("r").isNullOrEmpty()) return null
+
+        var path = uri.path.orEmpty().trimEnd('/')
+        if (path.startsWith("/index.php/")) path = path.removePrefix("/index.php")
+        if (path.isEmpty() || path == "/index.php") return null
+        if (fileExt.containsMatchIn(path)) return null
+
+        val query = LinkedHashMap<String, String>()
+        for (name in uri.queryParameterNames) {
+            uri.getQueryParameter(name)?.let { query[name] = it }
+        }
+        return url(path, query)
+    }
 }

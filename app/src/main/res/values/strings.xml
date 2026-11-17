@@ -28,4 +28,23 @@
     <string name="notif_title">MB Animes</string>
     <string name="notif_text">A descarregar episódios…</string>
     <string name="notif_open">Abrir downloads</string>
+
+    <string name="search">Pesquisar</string>
+    <string name="downloads_wifi_only_long">Descarregar só com Wi-Fi</string>
+    <string name="downloads_empty_title">Sem downloads</string>
+    <string name="downloads_summary_none">Os teus episódios offline aparecem aqui</string>
+    <string name="downloads_summary">%1$d episódio(s) · %2$s</string>
+    <string name="error_title">Sem ligação</string>
+    <string name="error_text">Verifica a tua internet e tenta de novo.</string>
+    <string name="error_retry">Tentar de novo</string>
+    <string name="error_downloads">Ver downloads offline</string>
+    <string name="more">Mais opções</string>
+    <string name="menu_reload">Recarregar</string>
+    <string name="menu_share">Partilhar</string>
+    <string name="menu_site_menu_show">Mostrar menu do site</string>
+    <string name="menu_site_menu_hide">Ocultar menu do site</string>
+    <string name="share_chooser">Partilhar com</string>
+    <string name="seek_back">−10 s</string>
+    <string name="seek_fwd">+10 s</string>
+    <string name="state_done_public">Guardado em Downloads/MB Animes · %1$s</string>
 </resources>

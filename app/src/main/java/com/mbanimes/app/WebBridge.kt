@@ -5,6 +5,7 @@ import com.mbanimes.app.download.DlState
 import com.mbanimes.app.download.DownloadItem
 import com.mbanimes.app.download.DownloadStore
 import com.mbanimes.app.download.Downloads
+import com.mbanimes.app.download.PublicStorage
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -32,7 +33,7 @@ class WebBridge(private val activity: MainActivity) {
             val ctx = activity.applicationContext
             val old = DownloadStore.get(id)
             if (old != null) {
-                if (old.state == DlState.DONE && old.filePath?.let { File(it).exists() } == true) return "exists"
+                if (PublicStorage.available(ctx, old)) return "exists"
                 if (old.state == DlState.QUEUED || old.state == DlState.DOWNLOADING) return "busy"
                 if (old.url != url) Downloads.wipe(ctx, id) // fonte diferente: não reaproveita parciais
             }

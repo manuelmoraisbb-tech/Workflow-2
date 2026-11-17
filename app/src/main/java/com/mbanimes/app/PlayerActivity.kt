@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
@@ -14,6 +16,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import com.mbanimes.app.download.PublicStorage
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -47,6 +50,7 @@ class PlayerActivity : AppCompatActivity() {
                 topBar.visibility = if (v == View.VISIBLE) View.VISIBLE else View.GONE
             }
         )
+        setupDoubleTapSeek()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -58,8 +62,10 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         if (path.isEmpty()) return
-        val file = File(path)
-        if (!file.exists()) {
+        val isUri = path.startsWith("content://") || path.startsWith("file://")
+        val media: Uri = if (isUri) Uri.parse(path) else Uri.fromFile(File(path))
+        val present = if (isUri) PublicStorage.exists(this, path) else File(path).exists()
+        if (!present) {
             Toast.makeText(this, R.string.file_missing, Toast.LENGTH_LONG).show()
             finish()
             return
@@ -71,7 +77,7 @@ class PlayerActivity : AppCompatActivity() {
                 Toast.makeText(this@PlayerActivity, error.message ?: "Erro ao reproduzir", Toast.LENGTH_LONG).show()
             }
         })
-        p.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+        p.setMediaItem(MediaItem.fromUri(media))
         val saved = prefs().getLong("pos_$id", 0L)
         if (saved > 0) p.seekTo(saved)
         p.prepare()
@@ -88,6 +94,30 @@ class PlayerActivity : AppCompatActivity() {
         player = null
         playerView.player = null
         super.onStop()
+    }
+
+    /** Toque duplo na metade esquerda recua 10 s, na direita avança 10 s. */
+    private fun setupDoubleTapSeek() {
+        val hint = findViewById<TextView>(R.id.seekHint)
+        val hide = Runnable { hint.visibility = View.GONE }
+        val detector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val p = player ?: return false
+                val forward = e.x > playerView.width / 2f
+                val target = (p.currentPosition + if (forward) 10_000L else -10_000L).coerceAtLeast(0L)
+                val dur = p.duration
+                p.seekTo(if (dur > 0) target.coerceAtMost(dur) else target)
+                hint.setText(if (forward) R.string.seek_fwd else R.string.seek_back)
+                hint.visibility = View.VISIBLE
+                hint.removeCallbacks(hide)
+                hint.postDelayed(hide, 700)
+                return true
+            }
+        })
+        playerView.setOnTouchListener { _, ev ->
+            detector.onTouchEvent(ev)
+            false
+        }
     }
 
     private fun prefs() = getSharedPreferences("player", Context.MODE_PRIVATE)

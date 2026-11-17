@@ -2,17 +2,36 @@
     <style name="Theme.MBAnimes" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorOnPrimary">@color/black</item>
-        <item name="colorSurface">@color/black</item>
+        <item name="colorSurface">@color/bg</item>
+        <item name="colorOnSurface">@color/on_surface</item>
         <item name="colorSurfaceContainer">@color/surface</item>
-        <item name="colorSurfaceContainerHigh">@color/surface</item>
+        <item name="colorSurfaceContainerHigh">@color/surface_high</item>
         <item name="colorSecondaryContainer">@color/primary_container</item>
         <item name="colorOnSecondaryContainer">@color/primary</item>
-        <item name="android:windowBackground">@color/black</item>
+        <item name="colorOutline">@color/outline</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
     <style name="Theme.MBAnimes.Starting" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/black</item>
+        <item name="windowSplashScreenBackground">@color/bg</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash</item>
         <item name="postSplashScreenTheme">@style/Theme.MBAnimes</item>
+    </style>
+
+    <style name="Widget.MB.NavBar" parent="Widget.Material3.BottomNavigationView">
+        <item name="backgroundTint">@color/surface</item>
+        <item name="itemIconTint">@color/nav_item</item>
+        <item name="itemTextColor">@color/nav_item</item>
+        <item name="itemRippleColor">@color/primary_container</item>
+        <item name="elevation">0dp</item>
+    </style>
+
+    <style name="Widget.MB.IconButton" parent="">
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">44dp</item>
+        <item name="android:scaleType">center</item>
     </style>
 </resources>

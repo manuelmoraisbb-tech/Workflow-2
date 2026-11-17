@@ -53,3 +53,12 @@ app/src/main/java/com/mbanimes/app/
 
 ## URLs sem rewrite
 O site usa `index.php?r=/rota`. Em `app/build.gradle.kts`, `PRETTY_URLS = false` (padrão). Se um dia ativares URLs bonitos no site, muda para `true`.
+
+## Interface v1.1 (visual de app)
+- Barra superior nativa (logo/título, voltar, pesquisar, menu ⋮), barra de progresso fina e esqueleto animado em vez do spinner do site.
+- Ecrã de erro/offline nativo, Downloads redesenhado, player com toque duplo (±10 s).
+- `app/src/main/assets/app-mode.js`: esconde cabeçalho/rodapé web e tira o "feeling" de site. Ajusta `HIDE_SELECTORS` com as classes reais do teu site, ou põe `HIDE_CHROME = false` para desligar.
+- `Site.normalize()` corrige links "bonitos" (`/assistir/slug/1/2`) para `index.php?r=...` — resolve o "Continuar a ver" que abria a página inicial.
+
+## Downloads na pasta pública (v1.2)
+Ao terminar, o vídeo é copiado para **Downloads/MB Animes** (aparece na app Ficheiros/Galeria) e a cópia privada é apagada. Android 10+: via MediaStore, sem permissões. Android 7–9: pede permissão de armazenamento (se negada, o vídeo fica na pasta privada). Apagar na app também apaga o ficheiro em Downloads.

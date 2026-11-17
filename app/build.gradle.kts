@@ -24,7 +24,7 @@ android {
         // versionCode tem de subir a cada envio para a Play Store: no CI usa o nº da execução.
         versionCode = System.getenv("VERSION_CODE")?.toIntOrNull()
             ?: System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "1.0.0"
+        versionName = "1.2.0"
         // Endereço do site (muda aqui se mudares de domínio)
         buildConfigField("String", "SITE_URL", "\"https://mb-animes.ct.ws\"")
         // false = o site usa index.php?r=/rota (sem rewrite, como no InfinityFree); true = URLs bonitos (/catalogo)

@@ -10,6 +10,9 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.text.format.Formatter
+import android.util.Log
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -21,6 +24,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
@@ -41,6 +45,7 @@ import com.mbanimes.app.download.DownloadItem
 import com.mbanimes.app.download.DownloadStore
 import com.mbanimes.app.download.Downloads
 import com.mbanimes.app.download.DownloadsAdapter
+import com.mbanimes.app.download.PublicStorage
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -52,14 +57,27 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile
     private var currentUrl: String = ""
-    private var hasError = false
+    private var webTitle: String = ""
+    private var failedUrl: String? = null
     private var clearHistoryOnFinish = false
     private var suppressNav = false
+    private var focusSearchOnFinish = false
+    private var showSiteChrome = false
 
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
     private var chrome: WebChromeClient? = null
     private var imeVisible = false
+
+    private val appModeJs: String by lazy {
+        try {
+            assets.open("app-mode.js").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private val hideSkeletonRunnable = Runnable { hideSkeleton() }
 
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -83,14 +101,15 @@ class MainActivity : AppCompatActivity() {
         setContentView(b.root)
 
         applyInsets()
+        setupTopBar()
         setupWebView()
         if (BuildConfig.DEBUG) debugApiCheck()
         setupBottomNav()
         setupDownloadsPanel()
+        setupErrorView()
         setupBackHandling()
 
         if (savedInstanceState != null && b.webView.restoreState(savedInstanceState) != null) {
-            // página restaurada
             handleIntent(intent, initial = false)
         } else {
             handleIntent(intent, initial = true)
@@ -131,6 +150,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        b.skeleton.removeCallbacks(hideSkeletonRunnable)
         (b.webView.parent as? ViewGroup)?.removeView(b.webView)
         b.webView.stopLoading()
         b.webView.destroy()
@@ -146,7 +166,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 "API falhou: " + (e.message ?: e.javaClass.simpleName)
             }
-            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+            Log.d("MBAnimes", msg)
         }.start()
     }
 
@@ -165,6 +185,99 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ------------------------------------------------------------------ barra superior nativa
+
+    private fun setupTopBar() {
+        b.btnBack.setOnClickListener {
+            if (b.webView.canGoBack()) {
+                hideError()
+                b.webView.goBack()
+            } else {
+                loadTab("/")
+            }
+        }
+        b.btnSearch.setOnClickListener {
+            hideDownloads()
+            if (Site.logicalPath(Uri.parse(currentUrl)) == "/catalogo" && isTrustedPage()) {
+                focusSearch()
+            } else {
+                focusSearchOnFinish = true
+                loadTab("/catalogo")
+            }
+        }
+        b.btnMore.setOnClickListener { showMoreMenu() }
+    }
+
+    private fun showMoreMenu() {
+        val pm = PopupMenu(this, b.btnMore)
+        pm.menu.add(0, MENU_RELOAD, 0, R.string.menu_reload)
+        pm.menu.add(0, MENU_SHARE, 1, R.string.menu_share)
+        pm.menu.add(
+            0, MENU_SITE_MENU, 2,
+            if (showSiteChrome) R.string.menu_site_menu_hide else R.string.menu_site_menu_show
+        )
+        pm.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                MENU_RELOAD -> {
+                    hideDownloads()
+                    if (failedUrl != null && b.errorView.isVisible) retry() else b.webView.reload()
+                }
+                MENU_SHARE -> {
+                    val url = currentUrl.ifEmpty { siteUrl }
+                    val send = Intent(Intent.ACTION_SEND)
+                        .setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, url)
+                    startActivity(Intent.createChooser(send, getString(R.string.share_chooser)))
+                }
+                MENU_SITE_MENU -> {
+                    showSiteChrome = !showSiteChrome
+                    b.webView.evaluateJavascript(
+                        "window.__MB_SHOW_CHROME=$showSiteChrome;" +
+                            "if(window.__mbApp){window.__mbApp.setChrome($showSiteChrome);}", null
+                    )
+                }
+            }
+            true
+        }
+        pm.show()
+    }
+
+    private fun focusSearch() {
+        b.webView.requestFocus()
+        b.webView.evaluateJavascript(
+            "(function(){var i=document.querySelector('input[type=search],input[name=q],input[name=busca]," +
+                "input[name=search],input[placeholder*=esquis],input[placeholder*=earch]');" +
+                "if(i){i.scrollIntoView({block:'center'});i.focus();}})()", null
+        )
+    }
+
+    private fun isTopLevel(path: String) = path == "/" || path == "/catalogo" || path == "/biblioteca"
+
+    /** Título/botão voltar da barra superior de acordo com a página aberta. */
+    private fun updateTopBar() {
+        if (b.downloadsPanel.isVisible) {
+            b.btnBack.visibility = View.GONE
+            b.logo.visibility = View.GONE
+            b.pageTitle.setText(R.string.downloads_title)
+            return
+        }
+        val path = Site.logicalPath(Uri.parse(currentUrl.ifEmpty { siteUrl }))
+        val top = isTopLevel(path)
+        b.btnBack.visibility = if (top) View.GONE else View.VISIBLE
+        b.logo.visibility = if (path == "/") View.VISIBLE else View.GONE
+        b.pageTitle.text = when (path) {
+            "/" -> getString(R.string.app_name)
+            "/catalogo" -> getString(R.string.tab_catalog)
+            "/biblioteca" -> getString(R.string.tab_library)
+            else -> cleanTitle(webTitle)
+        }
+    }
+
+    private fun cleanTitle(raw: String): String {
+        val t = raw.replace(Regex("\\s*[|\\-–—·]\\s*MB\\s*Animes.*$", RegexOption.IGNORE_CASE), "").trim()
+        return if (t.isEmpty() || t.contains("://") || t.contains(".php")) getString(R.string.app_name) else t
+    }
+
     // ------------------------------------------------------------------ WebView
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -174,6 +287,11 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
 
+        wv.setBackgroundColor(ContextCompat.getColor(this, R.color.bg))
+        wv.overScrollMode = View.OVER_SCROLL_NEVER
+        wv.isVerticalScrollBarEnabled = false
+        wv.isHorizontalScrollBarEnabled = false
+
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -182,6 +300,7 @@ class MainActivity : AppCompatActivity() {
             cacheMode = WebSettings.LOAD_DEFAULT
             allowFileAccess = false
             allowContentAccess = false
+            textZoom = 100
             setSupportZoom(false)
             // o site deteta "MBAnimesApp" para esconder o rodapé e ativar o gestor de downloads
             userAgentString = userAgentString + " MBAnimesApp/" + BuildConfig.VERSION_NAME
@@ -192,30 +311,40 @@ class MainActivity : AppCompatActivity() {
 
         wv.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                hasError = false
                 currentUrl = url.orEmpty()
-                b.refresh.isRefreshing = true
+                hideError()
+                showLoading()
                 syncTab(url)
+                injectAppMode(view, url)
+            }
+
+            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                injectAppMode(view, url)
+                hideSkeleton()
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 currentUrl = url.orEmpty()
                 b.refresh.isRefreshing = false
+                b.loadBar.visibility = View.INVISIBLE
                 if (clearHistoryOnFinish) {
                     clearHistoryOnFinish = false
                     view?.clearHistory()
                 }
                 syncTab(url)
+                injectAppMode(view, url)
+                hideSkeleton()
+                if (focusSearchOnFinish && Site.logicalPath(Uri.parse(url.orEmpty())) == "/catalogo") {
+                    focusSearchOnFinish = false
+                    focusSearch()
+                }
             }
 
             override fun onReceivedError(
                 view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
-                // só mostra a página de erro se falhar a página principal
-                if (request?.isForMainFrame == true) {
-                    hasError = true
-                    view?.loadDataWithBaseURL(null, offlineHtml, "text/html", "UTF-8", null)
-                }
+                // só mostra o ecrã de erro se falhar a página principal
+                if (request?.isForMainFrame == true) showError(request.url?.toString() ?: siteUrl)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -226,11 +355,18 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
                 if (s.startsWith("mbapp://retry")) {
-                    hasError = false
-                    view?.loadUrl(siteUrl)
+                    retry()
                     return true
                 }
-                if ((uri.scheme == "http" || uri.scheme == "https") && isSiteUri(uri)) return false
+                if ((uri.scheme == "http" || uri.scheme == "https") && isSiteUri(uri)) {
+                    // corrige links "bonitos" (ex.: do "Continuar a ver") que cairiam na página inicial
+                    val fixed = Site.normalize(uri)
+                    if (fixed != null) {
+                        view?.loadUrl(fixed)
+                        return true
+                    }
+                    return false
+                }
                 openExternal(uri)
                 return true
             }
@@ -242,6 +378,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         chrome = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (newProgress in 1..99 && !b.errorView.isVisible) {
+                    b.loadBar.visibility = View.VISIBLE
+                    b.loadBar.setProgressCompat(newProgress, true)
+                } else {
+                    b.loadBar.visibility = View.INVISIBLE
+                }
+            }
+
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                webTitle = title.orEmpty()
+                updateTopBar()
+            }
+
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (customView != null || view == null) {
                     callback?.onCustomViewHidden()
@@ -250,6 +400,8 @@ class MainActivity : AppCompatActivity() {
                 customView = view
                 customCallback = callback
                 b.refresh.visibility = View.GONE
+                b.topBar.visibility = View.GONE
+                b.loadBar.visibility = View.GONE
                 b.bottomNav.visibility = View.GONE
                 b.fullscreenContainer.visibility = View.VISIBLE
                 b.fullscreenContainer.addView(
@@ -270,8 +422,9 @@ class MainActivity : AppCompatActivity() {
                 val v = customView ?: return
                 b.fullscreenContainer.removeView(v)
                 b.fullscreenContainer.visibility = View.GONE
-                if (b.downloadsPanel.isVisible) b.downloadsPanel.visibility = View.VISIBLE
-                else b.refresh.visibility = View.VISIBLE
+                if (!b.downloadsPanel.isVisible) b.refresh.visibility = View.VISIBLE
+                b.topBar.visibility = View.VISIBLE
+                b.loadBar.visibility = View.INVISIBLE
                 b.bottomNav.visibility = if (imeVisible) View.GONE else View.VISIBLE
                 customCallback?.onCustomViewHidden()
                 customView = null
@@ -284,22 +437,12 @@ class MainActivity : AppCompatActivity() {
 
         // puxar para baixo para atualizar (só quando a página está no topo)
         b.refresh.setColorSchemeResources(R.color.primary)
-        b.refresh.setProgressBackgroundColorSchemeResource(R.color.surface)
+        b.refresh.setProgressBackgroundColorSchemeResource(R.color.surface_high)
         b.refresh.setOnChildScrollUpCallback { _, _ -> b.webView.scrollY > 0 }
         b.refresh.setOnRefreshListener {
-            if (hasError) b.webView.loadUrl(siteUrl) else b.webView.reload()
+            if (b.errorView.isVisible) retry() else b.webView.reload()
         }
     }
-
-    private val offlineHtml = """
-        <html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-        <body style="font-family:sans-serif;text-align:center;padding:64px 24px;background:#000;color:#eee">
-        <h2>Sem ligação</h2>
-        <p style="color:#a0a0a0">Verifica a tua internet e tenta de novo.</p>
-        <p><a href="mbapp://retry" style="display:inline-block;padding:12px 28px;background:#ff640a;color:#000;font-weight:700;border-radius:999px;text-decoration:none">Tentar de novo</a></p>
-        <p><a href="mbapp://downloads" style="color:#ff640a">Ver downloads offline</a></p>
-        </body></html>
-    """.trimIndent()
 
     fun isTrustedPage(): Boolean {
         val u = Uri.parse(currentUrl)
@@ -316,15 +459,65 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun injectAppMode(view: WebView?, url: String?) {
+        val u = url ?: return
+        if (appModeJs.isEmpty() || !isSiteUri(Uri.parse(u))) return
+        view?.evaluateJavascript("window.__MB_SHOW_CHROME=$showSiteChrome;\n$appModeJs", null)
+    }
+
     private fun handleIntent(i: Intent?, initial: Boolean) {
         val data = i?.data
         if (data != null && isSiteUri(data)) {
             hideDownloads()
-            b.webView.loadUrl(data.toString())
+            b.webView.loadUrl(Site.normalize(data) ?: data.toString())
         } else if (initial) {
             b.webView.loadUrl(siteUrl)
         }
         if (i?.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false) == true) showDownloads()
+    }
+
+    // ------------------------------------------------------------------ carregamento e erro
+
+    private fun showLoading() {
+        if (b.refresh.isRefreshing || b.downloadsPanel.isVisible) return
+        b.skeleton.removeCallbacks(hideSkeletonRunnable)
+        b.skeleton.animate().cancel()
+        b.skeleton.alpha = 1f
+        b.skeleton.visibility = View.VISIBLE
+        b.skeleton.postDelayed(hideSkeletonRunnable, 10_000) // segurança: nunca fica preso
+    }
+
+    private fun hideSkeleton() {
+        b.skeleton.removeCallbacks(hideSkeletonRunnable)
+        if (!b.skeleton.isVisible) return
+        b.skeleton.animate().alpha(0f).setDuration(180).withEndAction {
+            b.skeleton.visibility = View.GONE
+            b.skeleton.alpha = 1f
+        }.start()
+    }
+
+    private fun showError(url: String) {
+        failedUrl = url
+        b.refresh.isRefreshing = false
+        b.loadBar.visibility = View.INVISIBLE
+        b.skeleton.removeCallbacks(hideSkeletonRunnable)
+        b.skeleton.animate().cancel()
+        b.skeleton.visibility = View.GONE
+        b.errorView.visibility = View.VISIBLE
+    }
+
+    private fun hideError() {
+        if (b.errorView.isVisible) b.errorView.visibility = View.GONE
+    }
+
+    private fun retry() {
+        hideError()
+        b.webView.loadUrl(failedUrl ?: siteUrl)
+    }
+
+    private fun setupErrorView() {
+        b.errorRetry.setOnClickListener { retry() }
+        b.errorDownloads.setOnClickListener { showDownloads() }
     }
 
     // ------------------------------------------------------------------ separadores
@@ -332,6 +525,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupBottomNav() {
         b.bottomNav.setOnItemSelectedListener { item ->
             if (suppressNav) return@setOnItemSelectedListener true
+            b.bottomNav.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             when (item.itemId) {
                 R.id.tab_home -> { hideDownloads(); loadTab("/") }
                 R.id.tab_catalog -> { hideDownloads(); loadTab("/catalogo") }
@@ -341,13 +535,18 @@ class MainActivity : AppCompatActivity() {
             true
         }
         b.bottomNav.setOnItemReselectedListener { item ->
-            if (item.itemId != R.id.tab_downloads) b.webView.scrollTo(0, 0)
+            if (item.itemId != R.id.tab_downloads) {
+                b.webView.evaluateJavascript("window.scrollTo({top:0,behavior:'smooth'})", null)
+            } else {
+                b.downloadsList.smoothScrollToPosition(0)
+            }
         }
     }
 
     private fun loadTab(path: String) {
+        hideError()
         if (Site.logicalPath(Uri.parse(currentUrl)) == path && isTrustedPage()) {
-            b.webView.scrollTo(0, 0)
+            b.webView.evaluateJavascript("window.scrollTo({top:0,behavior:'smooth'})", null)
         } else {
             clearHistoryOnFinish = true
             b.webView.loadUrl(Site.url(path))
@@ -362,7 +561,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Mantém o separador selecionado de acordo com a página aberta no site. */
+    /** Mantém o separador e a barra superior de acordo com a página aberta no site. */
     private fun syncTab(url: String?) {
         if (url == null || b.downloadsPanel.isVisible) return
         val u = Uri.parse(url)
@@ -376,6 +575,7 @@ class MainActivity : AppCompatActivity() {
             else -> null
         }
         if (tab != null) selectTab(tab)
+        updateTopBar()
     }
 
     // ------------------------------------------------------------------ downloads (painel nativo)
@@ -394,6 +594,7 @@ class MainActivity : AppCompatActivity() {
         b.refresh.visibility = View.GONE
         b.downloadsPanel.visibility = View.VISIBLE
         selectTab(R.id.tab_downloads)
+        updateTopBar()
         refreshDownloads()
     }
 
@@ -401,13 +602,21 @@ class MainActivity : AppCompatActivity() {
         if (b.downloadsPanel.isVisible) {
             b.downloadsPanel.visibility = View.GONE
             b.refresh.visibility = View.VISIBLE
+            updateTopBar()
         }
     }
 
     private fun refreshDownloads() {
         val list = DownloadStore.all()
         adapter.submitList(list)
-        b.emptyText.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        b.emptyState.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        val done = list.filter { it.state == DlState.DONE }
+        b.downloadsSummary.text = if (list.isEmpty()) {
+            getString(R.string.downloads_summary_none)
+        } else {
+            val size = Formatter.formatShortFileSize(this, done.sumOf { it.bytes })
+            getString(R.string.downloads_summary, list.size, size)
+        }
         val active = list.count { it.state == DlState.DOWNLOADING || it.state == DlState.QUEUED }
         val badge = b.bottomNav.getOrCreateBadge(R.id.tab_downloads)
         badge.isVisible = active > 0
@@ -417,12 +626,12 @@ class MainActivity : AppCompatActivity() {
     private fun onDownloadPrimary(d: DownloadItem) {
         when (d.state) {
             DlState.DONE -> {
-                val f = d.filePath?.let { File(it) }
-                if (f == null || !f.exists()) {
+                val target = PublicStorage.playable(d)
+                if (target == null || !PublicStorage.available(this, d)) {
                     Toast.makeText(this, R.string.file_missing, Toast.LENGTH_LONG).show()
                     return
                 }
-                startActivity(PlayerActivity.intent(this, d.id, d.title + " · " + d.episode, f.absolutePath))
+                startActivity(PlayerActivity.intent(this, d.id, d.title + " · " + d.episode, target))
             }
             DlState.QUEUED, DlState.DOWNLOADING -> Downloads.pause(d.id)
             DlState.PAUSED, DlState.FAILED -> {
@@ -441,7 +650,14 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private val storagePermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     fun ensureNotificationPermission() {
+        // Android 7–9: precisa de permissão para gravar na pasta Downloads
+        if (PublicStorage.needsLegacyPermission(this)) {
+            storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -460,7 +676,10 @@ class MainActivity : AppCompatActivity() {
                         hideDownloads()
                         syncTab(currentUrl)
                     }
-                    b.webView.canGoBack() && !hasError -> b.webView.goBack()
+                    b.webView.canGoBack() -> {
+                        hideError()
+                        b.webView.goBack()
+                    }
                     else -> {
                         isEnabled = false
                         onBackPressedDispatcher.onBackPressed()
@@ -472,5 +691,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_OPEN_DOWNLOADS = "open_downloads"
+        private const val MENU_RELOAD = 1
+        private const val MENU_SHARE = 2
+        private const val MENU_SITE_MENU = 3
     }
 }
