@@ -1,0 +1,53 @@
+name: Extrair zip
+on:
+  workflow_dispatch:
+    inputs:
+      zip:
+        description: "Caminho do zip no repositório"
+        default: "MB-Animes-App.zip"
+      limpar:
+        description: "Apagar app/ e gradle/ antes de extrair"
+        type: boolean
+        default: true
+  push:
+    paths: ["*.zip"]
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    env:
+      HAS_PAT: ${{ secrets.PAT != '' }}
+      ZIP: ${{ inputs.zip || 'MB-Animes-App.zip' }}
+      LIMPAR: ${{ inputs.limpar == false && 'nao' || 'sim' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT || github.token }}
+
+      - name: Extrair
+        run: |
+          test -f "$ZIP" || { echo "Não encontrei $ZIP na raiz do repositório"; exit 1; }
+          rm -rf /tmp/x && mkdir /tmp/x
+          unzip -q "$ZIP" -d /tmp/x
+          cd /tmp/x
+          # se o zip trouxer uma única pasta, entra nela
+          if [ "$(ls -A | wc -l)" = "1" ] && [ -d "$(ls -A)" ]; then cd "$(ls -A)"; fi
+          # sem PAT o GitHub recusa alterações a .github/workflows
+          if [ "$HAS_PAT" != "true" ]; then rm -rf .github; fi
+          cd "$GITHUB_WORKSPACE"
+          if [ "$LIMPAR" = "sim" ]; then rm -rf app gradle .androidide; fi
+          SRC=/tmp/x; [ "$(ls -A $SRC | wc -l)" = "1" ] && [ -d "$SRC/$(ls -A $SRC)" ] && SRC="$SRC/$(ls -A $SRC)"
+          cp -a "$SRC/." .
+          rm -f "$ZIP"
+
+      - name: Commit e push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "Nada para commitar"; exit 0; }
+          git commit -m "Extrair $ZIP"
+          git push
