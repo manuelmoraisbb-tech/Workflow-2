@@ -1,0 +1,45 @@
+name: Extrair ficheiros ZIP
+
+on:
+  push:
+    paths:
+      - '*.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extrair:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Extrair todos os ZIPs da raiz
+        run: |
+          shopt -s nullglob
+
+          for arquivo in *.zip; do
+            nome="${arquivo%.zip}"
+
+            echo "Extraindo: $arquivo"
+
+            mkdir -p "$nome"
+            unzip -o "$arquivo" -d "$nome"
+          done
+
+      - name: Guardar ficheiros extraídos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Extrair ficheiros ZIP automaticamente"
+            git push
+          else
+            echo "Nenhuma alteração para guardar."
+          fi
