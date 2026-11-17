@@ -4,6 +4,7 @@ import android.text.format.Formatter
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -42,9 +43,23 @@ class DownloadsAdapter(
             DlState.PAUSED ->
                 if (d.waitingWifi) ctx.getString(R.string.state_wifi_wait)
                 else ctx.getString(R.string.state_paused, d.progress)
-            DlState.DONE -> ctx.getString(R.string.state_done, Formatter.formatShortFileSize(ctx, d.bytes))
+            DlState.DONE -> ctx.getString(
+                if (d.uri != null) R.string.state_done_public else R.string.state_done,
+                Formatter.formatShortFileSize(ctx, d.bytes)
+            )
             DlState.FAILED -> ctx.getString(R.string.state_failed, d.error ?: "erro")
         }
+
+        h.b.status.setTextColor(
+            ContextCompat.getColor(
+                ctx,
+                when (d.state) {
+                    DlState.DONE -> R.color.success
+                    DlState.FAILED -> R.color.danger
+                    else -> R.color.muted
+                }
+            )
+        )
 
         val active = d.state == DlState.DOWNLOADING || d.state == DlState.QUEUED
         h.b.primary.setImageResource(if (active) R.drawable.ic_pause else R.drawable.ic_play)

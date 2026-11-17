@@ -15,6 +15,7 @@ data class DownloadItem(
     val bytes: Long = 0L,
     val total: Long = 0L,
     val filePath: String? = null,
+    val uri: String? = null,
     val error: String? = null,
     val waitingWifi: Boolean = false
 )

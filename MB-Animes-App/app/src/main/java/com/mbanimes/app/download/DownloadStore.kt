@@ -105,6 +105,7 @@ object DownloadStore {
                     bytes = o.optLong("bytes"),
                     total = o.optLong("total"),
                     filePath = o.optString("filePath").ifEmpty { null },
+                    uri = o.optString("uri").ifEmpty { null },
                     error = o.optString("error").ifEmpty { null }
                 )
                 items[it.id] = it
@@ -125,7 +126,7 @@ object DownloadStore {
                         .put("poster", it.poster).put("url", it.url).put("pageUrl", it.pageUrl)
                         .put("createdAt", it.createdAt).put("state", it.state.name)
                         .put("progress", it.progress).put("bytes", it.bytes).put("total", it.total)
-                        .put("filePath", it.filePath ?: "").put("error", it.error ?: "")
+                        .put("filePath", it.filePath ?: "").put("uri", it.uri ?: "").put("error", it.error ?: "")
                 )
             }
             val tmp = File(file.parentFile, "downloads.json.tmp")

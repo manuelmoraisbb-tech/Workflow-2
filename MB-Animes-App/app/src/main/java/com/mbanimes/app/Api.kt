@@ -37,7 +37,6 @@ object Session {
  * Erros: ApiException (resposta da API) ou IOException (rede).
  */
 object Api {
-    private val base = BuildConfig.SITE_URL.trimEnd('/') + "/api/v1"
     private val JSON = "application/json; charset=utf-8".toMediaType()
 
     fun get(path: String, query: Map<String, String> = emptyMap()): JSONObject = call(path, query, null)
@@ -75,9 +74,7 @@ object Api {
     }
 
     private fun call(path: String, query: Map<String, String>, body: JSONObject?): JSONObject {
-        val url = (base + path).toHttpUrl().newBuilder().apply {
-            query.forEach { (k, v) -> addQueryParameter(k, v) }
-        }.build()
+        val url = Site.url("/api/v1$path", query).toHttpUrl()
         val rb = okhttp3.Request.Builder().url(url)
             .header("Accept", "application/json")
             .header("User-Agent", Net.userAgent)

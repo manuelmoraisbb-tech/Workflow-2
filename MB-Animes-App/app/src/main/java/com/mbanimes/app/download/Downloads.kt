@@ -54,7 +54,10 @@ object Downloads {
             it.remove = true
             it.stop()
         }
-        DownloadStore.get(id)?.filePath?.let { File(it).delete() }
+        DownloadStore.get(id)?.let { cur ->
+            cur.filePath?.let { File(it).delete() }
+            cur.uri?.let { PublicStorage.delete(ctx, it) }
+        }
         wipe(ctx, id)
         DownloadStore.remove(id)
     }
@@ -84,10 +87,16 @@ object Downloads {
                 DownloadService.progress(ctx, DownloadStore.get(id)?.title.orEmpty(), pct)
             }
             val file = engine.run(item)
+            val size = file.length()
+            // copia para Downloads/MB Animes; se conseguir, apaga a cópia privada (não duplica espaço)
+            val publicUri = PublicStorage.export(ctx, file)
+            if (publicUri != null) file.delete()
             DownloadStore.update(id) {
                 it.copy(
-                    state = DlState.DONE, progress = 100, filePath = file.absolutePath,
-                    bytes = file.length(), total = file.length(), error = null
+                    state = DlState.DONE, progress = 100,
+                    filePath = if (publicUri == null) file.absolutePath else null,
+                    uri = publicUri,
+                    bytes = size, total = size, error = null
                 )
             }
         } catch (e: Exception) {
