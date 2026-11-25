@@ -1,0 +1,38 @@
+# .github/workflows/run-python.yml
+name: Run Python Script
+
+on:
+  workflow_dispatch: # corre só quando tu carregas no botão
+    inputs:
+      script:
+        description: 'Qual script correr'
+        required: true
+        default: 'meu_script.py'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Correr script
+        run: python ${{ github.event.inputs.script }}
+
+      - name: Guardar resultados
+        uses: actions/upload-artifact@v4
+        with:
+          name: saida
+          path: |
+            mhtml/
+            *.txt
+            *.json
