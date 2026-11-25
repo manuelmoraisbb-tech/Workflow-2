@@ -92,7 +92,7 @@ def main():
 
     with open(CACHE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=1)
-        with open(FICHEIRO, "w", encoding="utf-8") as f:
+    with open(FICHEIRO, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     with open("imagens.json", "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
