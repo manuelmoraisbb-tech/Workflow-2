@@ -1,0 +1,33 @@
+name: Atualizar imagens dos animes
+
+on:
+  workflow_dispatch:   # corres manualmente no botão "Run workflow"
+
+permissions:
+  contents: write
+
+jobs:
+  imagens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Gerar JSON leve (só se existir links.json)
+        if: hashFiles('links.json') != ''
+        run: python extrair_leve.py
+
+      - name: Buscar imagens no AniList
+        run: python fix_imagens.py
+
+      - name: Guardar resultados no repositório
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add animes_leve.json imagens.json imagens_cache.json
+          git diff --staged --quiet || git commit -m "Atualiza imagens dos animes"
+          git push
